@@ -17,6 +17,8 @@ import io.flutter.plugin.common.MethodChannel.Result
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 private const val TAG = "QuickBluePlugin"
 
@@ -30,6 +32,8 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
   private lateinit var method : MethodChannel
   private lateinit var eventScanResult : EventChannel
   private lateinit var messageConnector: BasicMessageChannel<Any>
+  private val lock = ReentrantLock()
+  private val writeCondition = lock.newCondition()
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     method = MethodChannel(flutterPluginBinding.binaryMessenger, "quick_blue/method")
@@ -138,20 +142,24 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
           result.error("Characteristic unavailable", null, null)
       }
       "writeValue" -> {
-        val deviceId = call.argument<String>("deviceId")!!
-        val service = call.argument<String>("service")!!
-        val characteristic = call.argument<String>("characteristic")!!
-        val value = call.argument<ByteArray>("value")!!
-        val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
-        val writeResult = gatt.getCharacteristic(service to characteristic)?.let {
-          it.value = value
-          gatt.writeCharacteristic(it)
+        lock.withLock<Unit> {
+          val deviceId = call.argument<String>("deviceId")!!
+          val service = call.argument<String>("service")!!
+          val characteristic = call.argument<String>("characteristic")!!
+          val value = call.argument<ByteArray>("value")!!
+          val gatt = knownGatts.find { it.device.address == deviceId }
+            ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          val writeResult = gatt.getCharacteristic(service to characteristic)?.let {
+            it.value = value
+            gatt.writeCharacteristic(it)
+          }
+          if (writeResult == true) {
+            writeCondition.await()
+            result.success(null)
+          }else {
+            result.error("Characteristic unavailable", null, null)
+          }
         }
-        if (writeResult == true)
-          result.success(null)
-        else
-          result.error("Characteristic unavailable", null, null)
       }
       else -> {
         result.notImplemented()
@@ -260,6 +268,9 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     override fun onCharacteristicWrite(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic, status: Int) {
       Log.v(TAG, "onCharacteristicWrite ${characteristic.uuid}, ${characteristic.value.contentToString()} $status")
+      lock.withLock {
+        writeCondition.signal()
+      }
     }
 
     override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
