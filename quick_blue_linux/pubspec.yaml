@@ -3,6 +3,7 @@ description: Linux implementation of the quick_blue plugin.
 version: 0.2.0-dev.0
 homepage: https://github.com/woodemi/quick_blue
 repository: https://github.com/woodemi/quick_blue/tree/master/quick_blue_linux
+publish_to: none
 
 environment:
   sdk: ">=2.13.0 <3.0.0"
@@ -12,7 +13,10 @@ dependencies:
   flutter:
     sdk: flutter
   quick_blue_platform_interface:
-    path: ../quick_blue_platform_interface
+    git:
+      url: https://github.com/f7deleon/quick_blue.git
+      ref: bbb959a73968c1d17d09a8c4a48bd6207a9d052d
+      path: quick_blue_platform_interface
   bluez: ^0.7.9
   collection: ^1.15.0
   logging: ^1.0.2
