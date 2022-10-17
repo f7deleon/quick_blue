@@ -45,7 +45,7 @@ class QuickBlueLinux extends QuickBluePlatform {
   }
 
   @override
-  void startScan() async {
+  void startScan(List<String> advertisementServices) async {
     await _ensureInitialized();
     _log('startScan invoke success');
 

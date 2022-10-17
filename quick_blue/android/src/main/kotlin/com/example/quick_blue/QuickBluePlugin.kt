@@ -71,7 +71,12 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         result.success(bluetoothManager.adapter.isEnabled)
       }
       "startScan" -> {
-        bluetoothManager.adapter.bluetoothLeScanner?.startScan(scanCallback)
+        val advertisementServices = call.argument<List<String>>("advertisementServices")!!
+        bluetoothManager.adapter.bluetoothLeScanner?.startScan(advertisementServices.map { it: String ->
+          ScanFilter.Builder().setServiceUuid(
+            ParcelUuid(UUID.fromString(it))
+          ).build()
+        }, ScanSettings.Builder().build(), scanCallback)
         result.success(null)
       }
       "stopScan" -> {

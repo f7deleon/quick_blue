@@ -49,7 +49,7 @@ class QuickBlue {
   static Future<bool> isBluetoothAvailable() =>
       _platform.isBluetoothAvailable();
 
-  static void startScan() => _platform.startScan();
+  static void startScan(List<String> advertisedServices) => _platform.startScan(advertisedServices);
 
   static void stopScan() => _platform.stopScan();
 

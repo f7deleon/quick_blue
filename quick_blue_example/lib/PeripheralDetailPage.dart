@@ -4,15 +4,15 @@ import 'package:convert/convert.dart';
 import 'package:flutter/material.dart';
 import 'package:quick_blue/quick_blue.dart';
 
-String gssUuid(String code) => '0000$code-0000-1000-8000-00805f9b34fb';
+String gssUuid(String code) => 'd640$code-398c-4eb9-8889-15d0b9a1ccdd';
 
 final GSS_SERV__BATTERY = gssUuid('180f');
 final GSS_CHAR__BATTERY_LEVEL = gssUuid('2a19');
 
-const WOODEMI_SUFFIX = 'ba5e-f4ee-5ca1-eb1e5e4b1ce0';
+const WOODEMI_SUFFIX = '398c-4eb9-8889-15d0b9a1ccdd';
 
-const WOODEMI_SERV__COMMAND = '57444d01-$WOODEMI_SUFFIX';
-const WOODEMI_CHAR__COMMAND_REQUEST = '57444e02-$WOODEMI_SUFFIX';
+const WOODEMI_SERV__COMMAND = 'd6400007-$WOODEMI_SUFFIX';
+const WOODEMI_CHAR__COMMAND_REQUEST = 'd6400007-$WOODEMI_SUFFIX';
 const WOODEMI_CHAR__COMMAND_RESPONSE = WOODEMI_CHAR__COMMAND_REQUEST;
 
 const WOODEMI_MTU_WUART = 247;
