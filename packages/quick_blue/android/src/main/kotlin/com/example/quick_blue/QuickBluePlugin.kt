@@ -2,51 +2,69 @@ package com.example.quick_blue
 
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.BluetoothGattDescriptor.PERMISSION_READ
+import android.bluetooth.BluetoothGattDescriptor.PERMISSION_WRITE
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
-import android.content.Context
+import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.*
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import io.flutter.plugin.common.MethodChannel.Result
+
 
 private const val TAG = "QuickBluePlugin"
 
 /** QuickBluePlugin */
 @SuppressLint("MissingPermission")
-class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
+class QuickBluePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
   /// The MethodChannel that will the communication between Flutter and native Android
   ///
   /// This local reference serves to register the plugin with the Flutter Engine and unregister it
   /// when the Flutter Engine is detached from the Activity
-  private lateinit var method : MethodChannel
-  private lateinit var eventAvailabilityChange : EventChannel
-  private lateinit var eventScanResult : EventChannel
+  private lateinit var method: MethodChannel
+  private lateinit var eventAvailabilityChange: EventChannel
+  private lateinit var eventScanResult: EventChannel
   private lateinit var messageConnector: BasicMessageChannel<Any>
+  private val lock = ReentrantLock()
+  private val writeCondition = lock.newCondition()
+
 
   override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     method = MethodChannel(flutterPluginBinding.binaryMessenger, "quick_blue/method")
-    eventAvailabilityChange = EventChannel(flutterPluginBinding.binaryMessenger, "quick_blue/event.availabilityChange")
-    eventScanResult = EventChannel(flutterPluginBinding.binaryMessenger, "quick_blue/event.scanResult")
-    messageConnector = BasicMessageChannel(flutterPluginBinding.binaryMessenger, "quick_blue/message.connector", StandardMessageCodec.INSTANCE)
+    eventAvailabilityChange =
+      EventChannel(flutterPluginBinding.binaryMessenger, "quick_blue/event.availabilityChange")
+    eventScanResult =
+      EventChannel(flutterPluginBinding.binaryMessenger, "quick_blue/event.scanResult")
+    messageConnector = BasicMessageChannel(
+      flutterPluginBinding.binaryMessenger,
+      "quick_blue/message.connector",
+      StandardMessageCodec.INSTANCE
+    )
     method.setMethodCallHandler(this)
     eventAvailabilityChange.setStreamHandler(this)
     eventScanResult.setStreamHandler(this)
 
     context = flutterPluginBinding.applicationContext
     mainThreadHandler = Handler(Looper.getMainLooper())
-    bluetoothManager = flutterPluginBinding.applicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    bluetoothManager =
+      flutterPluginBinding.applicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
 
     context.registerReceiver(
       broadcastReceiver,
@@ -79,7 +97,12 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         result.success(bluetoothManager.adapter.isEnabled)
       }
       "startScan" -> {
-        bluetoothManager.adapter.bluetoothLeScanner?.startScan(scanCallback)
+        val advertisedServices = call.argument<List<String>?>("advertisedServices")
+        bluetoothManager.adapter.bluetoothLeScanner?.startScan(advertisedServices?.map { it: String ->
+          ScanFilter.Builder().setServiceUuid(
+            ParcelUuid(UUID.fromString(it))
+          ).build()
+        } ?: listOf(), ScanSettings.Builder().build(), scanCallback)
         result.success(null)
       }
       "stopScan" -> {
@@ -104,7 +127,7 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
       "disconnect" -> {
         val deviceId = call.argument<String>("deviceId")!!
         val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
         cleanConnection(gatt)
         result.success(null)
         //FIXME If `disconnect` is called before BluetoothGatt.STATE_CONNECTED
@@ -113,7 +136,7 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
       "discoverServices" -> {
         val deviceId = call.argument<String>("deviceId")!!
         val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
         gatt.discoverServices()
         result.success(null)
       }
@@ -123,9 +146,9 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         val characteristic = call.argument<String>("characteristic")!!
         val bleInputProperty = call.argument<String>("bleInputProperty")!!
         val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
         val c = gatt.getCharacteristic(service, characteristic)
-                ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
+          ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
         gatt.setNotifiable(c, bleInputProperty)
         result.success(null)
       }
@@ -134,34 +157,39 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
         val service = call.argument<String>("service")!!
         val characteristic = call.argument<String>("characteristic")!!
         val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
         val c = gatt.getCharacteristic(service, characteristic)
-                ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
+          ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
         if (gatt.readCharacteristic(c))
           result.success(null)
         else
           result.error("Characteristic unavailable", null, null)
       }
       "writeValue" -> {
-        val deviceId = call.argument<String>("deviceId")!!
-        val service = call.argument<String>("service")!!
-        val characteristic = call.argument<String>("characteristic")!!
-        val value = call.argument<ByteArray>("value")!!
-        val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
-        val c = gatt.getCharacteristic(service, characteristic)
-                ?: return result.error("IllegalArgument", "Unknown characteristic: $characteristic", null)
-        c.value = value
-        if (gatt.writeCharacteristic(c))
-          result.success(null)
-        else
-          result.error("Characteristic unavailable", null, null)
+        lock.withLock<Unit> {
+          val deviceId = call.argument<String>("deviceId")!!
+          val service = call.argument<String>("service")!!
+          val characteristic = call.argument<String>("characteristic")!!
+          val value = call.argument<ByteArray>("value")!!
+          val gatt = knownGatts.find { it.device.address == deviceId }
+            ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          val writeResult = gatt.getCharacteristic(service, characteristic)?.let {
+            it.value = value
+            gatt.writeCharacteristic(it)
+          }
+          if (writeResult == true) {
+            writeCondition.await()
+            result.success(null)
+          } else {
+            result.error("Characteristic unavailable", null, null)
+          }
+        }
       }
       "requestMtu" -> {
         val deviceId = call.argument<String>("deviceId")!!
         val expectedMtu = call.argument<Int>("expectedMtu")!!
         val gatt = knownGatts.find { it.device.address == deviceId }
-                ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
+          ?: return result.error("IllegalArgument", "Unknown deviceId: $deviceId", null)
         gatt.requestMtu(expectedMtu)
         result.success(null)
       }
@@ -187,7 +215,7 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
   fun BluetoothManager.getAvailabilityState(): AvailabilityState {
     val state = adapter?.state ?: return AvailabilityState.unsupported
-    return when(state) {
+    return when (state) {
       BluetoothAdapter.STATE_OFF -> AvailabilityState.poweredOff
       BluetoothAdapter.STATE_ON -> AvailabilityState.poweredOn
       BluetoothAdapter.STATE_TURNING_ON -> AvailabilityState.resetting
@@ -198,9 +226,9 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
   private val broadcastReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
-          availabilityChangeSink?.success(bluetoothManager.getAvailabilityState().value)
-        }
+      if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+        availabilityChangeSink?.success(bluetoothManager.getAvailabilityState().value)
+      }
     }
   }
 
@@ -211,12 +239,14 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     override fun onScanResult(callbackType: Int, result: ScanResult) {
       Log.v(TAG, "onScanResult: $callbackType + $result")
-      scanResultSink?.success(mapOf<String, Any>(
-              "name" to (result.device.name ?: ""),
-              "deviceId" to result.device.address,
-              "manufacturerDataHead" to (result.manufacturerDataHead ?: byteArrayOf()),
-              "rssi" to result.rssi
-      ))
+      scanResultSink?.success(
+        mapOf<String, Any>(
+          "name" to (result.device.name ?: ""),
+          "deviceId" to result.device.address,
+          "manufacturerDataHead" to (result.manufacturerDataHead ?: byteArrayOf()),
+          "rssi" to result.rssi
+        )
+      )
     }
 
     override fun onBatchScanResults(results: MutableList<ScanResult>?) {
@@ -248,18 +278,25 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
   private val gattCallback = object : BluetoothGattCallback() {
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-      Log.v(TAG, "onConnectionStateChange: device(${gatt.device.address}) status($status), newState($newState)")
+      Log.v(
+        TAG,
+        "onConnectionStateChange: device(${gatt.device.address}) status($status), newState($newState)"
+      )
       if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-        sendMessage(messageConnector, mapOf(
-          "deviceId" to gatt.device.address,
-          "ConnectionState" to "connected"
-        ))
+        sendMessage(
+          messageConnector, mapOf(
+            "deviceId" to gatt.device.address,
+            "ConnectionState" to "connected"
+          )
+        )
       } else {
         cleanConnection(gatt)
-        sendMessage(messageConnector, mapOf(
-          "deviceId" to gatt.device.address,
-          "ConnectionState" to "disconnected"
-        ))
+        sendMessage(
+          messageConnector, mapOf(
+            "deviceId" to gatt.device.address,
+            "ConnectionState" to "disconnected"
+          )
+        )
       }
     }
 
@@ -287,36 +324,65 @@ class QuickBluePlugin: FlutterPlugin, MethodCallHandler, EventChannel.StreamHand
 
     override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
       if (status == BluetoothGatt.GATT_SUCCESS) {
-        sendMessage(messageConnector, mapOf(
-          "mtuConfig" to mtu
-        ))
+        sendMessage(
+          messageConnector, mapOf(
+            "mtuConfig" to mtu
+          )
+        )
       }
     }
 
-    override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-      Log.v(TAG, "onCharacteristicRead ${characteristic.uuid}, ${characteristic.value.contentToString()}")
-      sendMessage(messageConnector, mapOf(
-        "deviceId" to gatt.device.address,
-        "characteristicValue" to mapOf(
-          "characteristic" to characteristic.uuid.toString(),
-          "value" to characteristic.value
+    override fun onCharacteristicRead(
+      gatt: BluetoothGatt,
+      characteristic: BluetoothGattCharacteristic,
+      status: Int
+    ) {
+      Log.v(
+        TAG,
+        "onCharacteristicRead ${characteristic.uuid}, ${characteristic.value.contentToString()}"
+      )
+      sendMessage(
+        messageConnector, mapOf(
+          "deviceId" to gatt.device.address,
+          "characteristicValue" to mapOf(
+            "characteristic" to characteristic.uuid.toString(),
+            "value" to characteristic.value
+          )
         )
-      ))
+      )
     }
 
-    override fun onCharacteristicWrite(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic, status: Int) {
-      Log.v(TAG, "onCharacteristicWrite ${characteristic.uuid}, ${characteristic.value.contentToString()} $status")
+    override fun onCharacteristicWrite(
+      gatt: BluetoothGatt?,
+      characteristic: BluetoothGattCharacteristic,
+      status: Int
+    ) {
+      Log.v(
+        TAG,
+        "onCharacteristicWrite ${characteristic.uuid}, ${characteristic.value.contentToString()} $status"
+      )
+      lock.withLock {
+        writeCondition.signal()
+      }
     }
 
-    override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-      Log.v(TAG, "onCharacteristicChanged ${characteristic.uuid}, ${characteristic.value.contentToString()}")
-      sendMessage(messageConnector, mapOf(
-        "deviceId" to gatt.device.address,
-        "characteristicValue" to mapOf(
-          "characteristic" to characteristic.uuid.toString(),
-          "value" to characteristic.value
+    override fun onCharacteristicChanged(
+      gatt: BluetoothGatt,
+      characteristic: BluetoothGattCharacteristic
+    ) {
+      Log.v(
+        TAG,
+        "onCharacteristicChanged ${characteristic.uuid}, ${characteristic.value.contentToString()}"
+      )
+      sendMessage(
+        messageConnector, mapOf(
+          "deviceId" to gatt.device.address,
+          "characteristicValue" to mapOf(
+            "characteristic" to characteristic.uuid.toString(),
+            "value" to characteristic.value
+          )
         )
-      ))
+      )
     }
   }
 }
@@ -330,20 +396,39 @@ val ScanResult.manufacturerDataHead: ByteArray?
   }
 
 fun Short.toByteArray(byteOrder: ByteOrder = ByteOrder.LITTLE_ENDIAN): ByteArray =
-        ByteBuffer.allocate(2 /*Short.SIZE_BYTES*/).order(byteOrder).putShort(this).array()
+  ByteBuffer.allocate(2 /*Short.SIZE_BYTES*/).order(byteOrder).putShort(this).array()
 
-fun BluetoothGatt.getCharacteristic(service: String, characteristic: String): BluetoothGattCharacteristic? =
-        getService(UUID.fromString(service)).getCharacteristic(UUID.fromString(characteristic))
+fun BluetoothGatt.getCharacteristic(
+  service: String,
+  characteristic: String
+): BluetoothGattCharacteristic? =
+  getService(UUID.fromString(service)).getCharacteristic(UUID.fromString(characteristic))
 
-private val DESC__CLIENT_CHAR_CONFIGURATION = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+private val DESC__CLIENT_CHAR_CONFIGURATION =
+  UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-fun BluetoothGatt.setNotifiable(gattCharacteristic: BluetoothGattCharacteristic, bleInputProperty: String) {
-  val descriptor = gattCharacteristic.getDescriptor(DESC__CLIENT_CHAR_CONFIGURATION)
+fun BluetoothGatt.setNotifiable(
+  gattCharacteristic: BluetoothGattCharacteristic,
+  bleInputProperty: String
+) {
+  if (gattCharacteristic.descriptors.none { it.uuid == DESC__CLIENT_CHAR_CONFIGURATION }) {
+    gattCharacteristic.addDescriptor(
+      BluetoothGattDescriptor(
+        DESC__CLIENT_CHAR_CONFIGURATION,
+        PERMISSION_WRITE or PERMISSION_READ
+      )
+    )
+  }
+  val descriptor =
+    gattCharacteristic.getDescriptor(DESC__CLIENT_CHAR_CONFIGURATION)
+
   val (value, enable) = when (bleInputProperty) {
     "notification" -> BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE to true
     "indication" -> BluetoothGattDescriptor.ENABLE_INDICATION_VALUE to true
     else -> BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE to false
   }
+
   descriptor.value = value
-  setCharacteristicNotification(descriptor.characteristic, enable) && writeDescriptor(descriptor)
+  writeDescriptor(descriptor)
+  setCharacteristicNotification(descriptor.characteristic, enable)
 }

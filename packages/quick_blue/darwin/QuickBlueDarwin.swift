@@ -77,7 +77,9 @@ public class QuickBlueDarwin: NSObject, FlutterPlugin {
     case "isBluetoothAvailable":
       result(manager.state == .poweredOn)
     case "startScan":
-      manager.scanForPeripherals(withServices: nil)
+      let arguments = call.arguments as! Dictionary<String, Any>
+      let advertisedServices = arguments["advertisedServices"] as! [String]?
+      manager.scanForPeripherals(withServices: advertisedServices?.map({ CBUUID(string: $0) }) ?? [])
       result(nil)
     case "stopScan":
       manager.stopScan()
